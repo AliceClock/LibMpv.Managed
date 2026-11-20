@@ -1,0 +1,160 @@
+name: Build and release preview packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish validated packages to NuGet.org
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: libmpv-managed-release
+  cancel-in-progress: false
+
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build locked LGPL Windows runtime
+        run: |
+          mkdir -p .artifacts/native
+          bash native/bootstrap.sh
+          docker run --rm --mount "type=bind,source=$PWD/native,target=/recipe,readonly" \
+            --mount "type=bind,source=$PWD/.artifacts/native,target=/out" libmpv-managed-build:0.42.0
+      - name: Rebuild offline using the corresponding source archive
+        run: |
+          mkdir -p .artifacts/rebuilt
+          docker run --rm --network=none --mount "type=bind,source=$PWD/native,target=/recipe,readonly" \
+            --mount "type=bind,source=$PWD/.artifacts/native,target=/input,readonly" \
+            --mount "type=bind,source=$PWD/.artifacts/rebuilt,target=/out" libmpv-managed-build:0.42.0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native
+          path: .artifacts/native/*
+          if-no-files-found: error
+
+  pack-and-verify:
+    needs: native
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/download-artifact@v4
+        with:
+          name: native
+          path: .artifacts/native
+      - name: Validate the packages in a separate Win64 project
+        shell: pwsh
+        run: |
+          $runtime = ./scripts/Get-UpstreamRuntime.ps1
+          ./scripts/New-TestDlls.ps1
+          $env:MPV_WRONG_ARCH_DLL = (Resolve-Path .artifacts/shims/x86.dll).Path
+          $env:MPV_OLD_API_DLL = (Resolve-Path .artifacts/shims/x64.dll).Path
+          dotnet pack src/LibMpv.Managed -c Release -o .artifacts/feed
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/Pack-Native.ps1 -Artifacts .artifacts/native -Output .artifacts/feed
+          ./scripts/Test-Packages.ps1 -Source .artifacts/feed -OverrideDll $runtime -AdditionalSources https://api.nuget.org/v3/index.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nupkgs
+          path: .artifacts/feed/*
+          if-no-files-found: error
+
+  publish:
+    if: inputs.publish && github.repository == 'AliceClock/LibMpv.Managed' && github.ref == 'refs/heads/main'
+    needs: pack-and-verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: nuget
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/download-artifact@v4
+        with:
+          name: native
+          path: artifacts/native
+      - uses: actions/download-artifact@v4
+        with:
+          name: nupkgs
+          path: artifacts/feed
+      - name: Publish corresponding source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          version=$(python3 -c 'import xml.etree.ElementTree as x; print(x.parse("native/package/LibMpv.Managed.Native.WinX64.csproj").findtext(".//Version"))')
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-preview\.[0-9]+$ ]]
+          tag="native-v$version"
+          (
+            cd artifacts/native
+            sha256sum -c corresponding-source.tar.xz.sha256
+            tar -czf ../build-records.tar.gz runtime.sha256 pe.txt config.h config.log meson-log.txt toolchain-packages.tsv sources.lock.tsv
+          )
+          if gh release view "$tag" >/dev/null 2>&1; then
+            mkdir -p artifacts/existing
+            gh release download "$tag" --pattern corresponding-source.tar.xz --pattern build-records.tar.gz --dir artifacts/existing
+            cmp artifacts/native/corresponding-source.tar.xz artifacts/existing/corresponding-source.tar.xz
+            tar -xOf artifacts/existing/build-records.tar.gz runtime.sha256 | cmp artifacts/native/runtime.sha256 -
+          else
+            gh release create "$tag" --target "$GITHUB_SHA" --prerelease --title "libmpv Windows x64 $version" \
+              --notes 'Corresponding source for the LGPL Win64 runtime on NuGet.org.' \
+              artifacts/native/corresponding-source.tar.xz artifacts/native/corresponding-source.tar.xz.sha256 artifacts/build-records.tar.gz
+          fi
+      - uses: NuGet/login@v1
+        id: nuget
+        with:
+          user: ${{ vars.NUGET_USER }}
+      - name: Push verified packages
+        env:
+          NUGET_API_KEY: ${{ steps.nuget.outputs.NUGET_API_KEY }}
+        shell: bash
+        run: |
+          dotnet nuget push artifacts/feed/LibMpv.Managed.Native.WinX64.*.nupkg --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json --skip-duplicate
+          for package in artifacts/feed/LibMpv.Managed.*.nupkg; do
+            [[ "${package##*/}" != *Native.WinX64* ]] || continue
+            dotnet nuget push "$package" --api-key "$NUGET_API_KEY" \
+              --source https://api.nuget.org/v3/index.json --skip-duplicate
+          done
+
+  public-restore:
+    needs: publish
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Verify public index and run installed packages
+        shell: pwsh
+        run: |
+          $managed = ([xml](Get-Content src/LibMpv.Managed/LibMpv.Managed.csproj -Raw)).Project.PropertyGroup.Version
+          $native = ([xml](Get-Content native/package/LibMpv.Managed.Native.WinX64.csproj -Raw)).Project.PropertyGroup.Version
+          $deadline = [DateTime]::UtcNow.AddMinutes(10)
+          foreach ($package in @{ 'libmpv.managed' = $managed; 'libmpv.managed.native.winx64' = $native }.GetEnumerator()) {
+            while ($true) {
+              try {
+                $uri = "https://api.nuget.org/v3-flatcontainer/$($package.Key)/index.json"
+                $index = Invoke-RestMethod -Uri $uri -TimeoutSec 15
+                if ($index.versions -contains $package.Value) { break }
+              } catch { Write-Host "Waiting for $($package.Key) in the public index." }
+              if ([DateTime]::UtcNow -ge $deadline) { throw "NuGet did not index $($package.Key) $($package.Value)." }
+              Start-Sleep -Seconds 10
+            }
+          }
+          ./scripts/Test-Packages.ps1 -Source https://api.nuget.org/v3/index.json

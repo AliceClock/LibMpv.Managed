@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <PackageId>LibMpv.Managed.Native.WinX64</PackageId>
+    <Version>0.42.0-preview.1</Version>
+    <Authors>AliceClock</Authors>
+    <Description>Optional LGPL libmpv 0.42.0 runtime for Windows x64 applications.</Description>
+    <PackageLicenseFile>LICENSES.md</PackageLicenseFile>
+    <PackageReadmeFile>RUNTIME.md</PackageReadmeFile>
+    <RepositoryUrl>https://github.com/AliceClock/LibMpv.Managed</RepositoryUrl>
+    <PackageProjectUrl>$(RepositoryUrl)</PackageProjectUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>mpv;libmpv;native;win-x64;lgpl</PackageTags>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="$(NativePackageStage)/runtime/libmpv-2.dll" Pack="true" PackagePath="runtimes/win-x64/native/" />
+    <None Include="$(NativePackageStage)/licenses/**/*" Pack="true" PackagePath="licenses/%(RecursiveDir)" />
+    <None Include="$(NativePackageStage)/LICENSES.md;$(NativePackageStage)/RUNTIME.md;$(NativePackageStage)/runtime.sha256;$(NativePackageStage)/corresponding-source.tar.xz.sha256;$(NativePackageStage)/sources.lock.tsv"
+          Pack="true" PackagePath="/" />
+    <None Include="LibMpv.Managed.Native.WinX64.targets" Pack="true" PackagePath="buildTransitive/" />
+  </ItemGroup>
+  <Target Name="RequireRuntimeStaging" BeforeTargets="GenerateNuspec">
+    <Error Condition="'$(NativePackageStage)' == '' or !Exists('$(NativePackageStage)/runtime/libmpv-2.dll')"
+           Text="Stage the verified native build with scripts/Pack-Native.ps1 before packing." />
+  </Target>
+</Project>

@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  managed:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Build examples, verify stock libmpv and pack
+        shell: pwsh
+        run: |
+          dotnet build samples/Play -c Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet build samples/Embed -c Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $runtime = ./scripts/Get-UpstreamRuntime.ps1
+          ./scripts/New-TestDlls.ps1
+          $env:MPV_WRONG_ARCH_DLL = (Resolve-Path .artifacts/shims/x86.dll).Path
+          $env:MPV_OLD_API_DLL = (Resolve-Path .artifacts/shims/x64.dll).Path
+          dotnet run --project tests/Smoke -c Release -- $runtime
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet pack src/LibMpv.Managed -c Release -o .artifacts/feed
+      - uses: actions/upload-artifact@v4
+        with:
+          name: managed-nupkg
+          path: .artifacts/feed/*
+          if-no-files-found: error

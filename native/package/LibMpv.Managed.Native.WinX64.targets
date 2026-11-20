@@ -1,0 +1,11 @@
+<Project>
+  <ItemGroup Condition="('$(OutputType)' == 'Exe' or '$(OutputType)' == 'WinExe') and
+                       ('$(RuntimeIdentifier)' == '' or '$(RuntimeIdentifier)' == 'win-x64')">
+    <Content Include="$(MSBuildThisFileDirectory)../licenses/**/*"
+             Link="libmpv-notices/licenses/%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(MSBuildThisFileDirectory)../LICENSES.md;$(MSBuildThisFileDirectory)../RUNTIME.md;$(MSBuildThisFileDirectory)../runtime.sha256;$(MSBuildThisFileDirectory)../corresponding-source.tar.xz.sha256;$(MSBuildThisFileDirectory)../sources.lock.tsv"
+             Link="libmpv-notices/%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
