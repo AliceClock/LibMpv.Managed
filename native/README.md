@@ -21,6 +21,8 @@ pwsh ./scripts/Pack-Native.ps1 -Artifacts .artifacts/native -Output .artifacts/f
 pwsh ./scripts/Test-Packages.ps1 -Source .artifacts/feed
 ```
 
-Both packages are published to NuGet.org from the manual release workflow. Configure Trusted Publishing policies for both package IDs, with ownership and new-package publishing scopes, and set `NUGET_USER` to the publishing account username. Assign the policy to `release.yml` and the `nuget` GitHub environment. The workflow publishes the exact native source archive, checksums and build records on GitHub before pushing either NuGet package. Its last job checks public restore from an empty cache.
+The manual workflow has three operations. `validate` builds and tests candidate artifacts. `stage` attaches the validated packages, corresponding source, checksums and build records to a versioned GitHub prerelease. `publish` verifies and pushes those exact GitHub assets to NuGet.org, then tests a public restore from an empty cache.
+
+Configure NuGet Trusted Publishing for both package IDs with new-package publishing scopes. Use repository `AliceClock/LibMpv.Managed`, workflow `release.yml`, and GitHub environment `nuget`. Set the environment variable `NUGET_USER` in GitHub Actions to the NuGet account username.
 
 The package embeds its license files and its matching source link. A consumer may run a modified ABI-compatible build by setting `MpvClientOptions.LibraryPath`. The official binary hashes are used during build and packaging only.

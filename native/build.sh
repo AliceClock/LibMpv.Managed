@@ -27,6 +27,12 @@ cp /recipe/{build.sh,bootstrap.sh,cross.ini,Dockerfile,sources.lock.tsv,verify-i
 tar --exclude=.git --sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner \
     -cJf /out/corresponding-source.tar.xz sources build-recipe
 
+# Compile the archived source on both the initial build and its offline replay.
+if [[ ! -f /input/corresponding-source.tar.xz ]]; then
+    mv sources sources-checkouts
+    tar -xJf /out/corresponding-source.tar.xz
+fi
+
 build_static() {
     local name=$1
     shift

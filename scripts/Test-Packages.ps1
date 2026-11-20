@@ -65,5 +65,10 @@ if ($copies.Count -ne 1 -or !(Test-Path -LiteralPath (Join-Path $publish 'libmpv
     throw 'The publish output must contain one libmpv DLL and its source notice.'
 }
 
+$hashFile = Join-Path $publish 'libmpv-notices/runtime.sha256'
+$expected = ((Get-Content -LiteralPath $hashFile -Raw) -split '\s+')[0]
+if ($expected -notmatch '^[a-f0-9]{64}$' -or (Get-FileHash -LiteralPath $copies[0].FullName).Hash -ne $expected) {
+    throw 'Published DLL does not match its accompanying SHA-256.'
+}
 Invoke-Dotnet (Join-Path $publish 'Consumer.dll')
 Write-Output "Verified fresh restore and publish: $consumerRoot"

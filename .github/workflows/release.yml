@@ -3,10 +3,11 @@ name: Build and release preview packages
 on:
   workflow_dispatch:
     inputs:
-      publish:
-        description: Publish validated packages to NuGet.org
-        type: boolean
-        default: false
+      operation:
+        description: Validate a build, stage verified packages on GitHub, or publish staged packages to NuGet.org
+        type: choice
+        options: [validate, stage, publish]
+        default: validate
 
 permissions:
   contents: read
@@ -17,6 +18,7 @@ concurrency:
 
 jobs:
   native:
+    if: inputs.operation != 'publish'
     runs-on: ubuntu-24.04
     timeout-minutes: 65
     steps:
@@ -33,6 +35,8 @@ jobs:
           docker run --rm --network=none --mount "type=bind,source=$PWD/native,target=/recipe,readonly" \
             --mount "type=bind,source=$PWD/.artifacts/native,target=/input,readonly" \
             --mount "type=bind,source=$PWD/.artifacts/rebuilt,target=/out" libmpv-managed-build:0.42.0
+          cmp .artifacts/native/corresponding-source.tar.xz .artifacts/rebuilt/corresponding-source.tar.xz
+          cmp .artifacts/native/runtime/libmpv-2.dll .artifacts/rebuilt/runtime/libmpv-2.dll
       - uses: actions/upload-artifact@v4
         with:
           name: native
@@ -69,20 +73,15 @@ jobs:
           path: .artifacts/feed/*
           if-no-files-found: error
 
-  publish:
-    if: inputs.publish && github.repository == 'AliceClock/LibMpv.Managed' && github.ref == 'refs/heads/main'
+  stage:
+    if: inputs.operation == 'stage' && github.repository == 'AliceClock/LibMpv.Managed' && github.ref == 'refs/heads/main'
     needs: pack-and-verify
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    environment: nuget
+    timeout-minutes: 15
     permissions:
       contents: write
-      id-token: write
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.x
       - uses: actions/download-artifact@v4
         with:
           name: native
@@ -90,44 +89,76 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: nupkgs
-          path: artifacts/feed
-      - name: Publish corresponding source
+          path: artifacts/release
+      - name: Publish reviewed packages and corresponding source on GitHub
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           version=$(python3 -c 'import xml.etree.ElementTree as x; print(x.parse("native/package/LibMpv.Managed.Native.WinX64.csproj").findtext(".//Version"))')
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-preview\.[0-9]+$ ]]
-          tag="native-v$version"
           (
             cd artifacts/native
             sha256sum -c corresponding-source.tar.xz.sha256
-            tar -czf ../build-records.tar.gz runtime.sha256 pe.txt config.h config.log meson-log.txt toolchain-packages.tsv sources.lock.tsv
+            tar -czf ../release/build-records.tar.gz runtime.sha256 pe.txt config.h config.log meson-log.txt toolchain-packages.tsv sources.lock.tsv
+            cp corresponding-source.tar.xz corresponding-source.tar.xz.sha256 ../release/
           )
-          if gh release view "$tag" >/dev/null 2>&1; then
-            mkdir -p artifacts/existing
-            gh release download "$tag" --pattern corresponding-source.tar.xz --pattern build-records.tar.gz --dir artifacts/existing
-            cmp artifacts/native/corresponding-source.tar.xz artifacts/existing/corresponding-source.tar.xz
-            tar -xOf artifacts/existing/build-records.tar.gz runtime.sha256 | cmp artifacts/native/runtime.sha256 -
-          else
-            gh release create "$tag" --target "$GITHUB_SHA" --prerelease --title "libmpv Windows x64 $version" \
-              --notes 'Corresponding source for the LGPL Win64 runtime on NuGet.org.' \
-              artifacts/native/corresponding-source.tar.xz artifacts/native/corresponding-source.tar.xz.sha256 artifacts/build-records.tar.gz
-          fi
+          (
+            cd artifacts/release
+            sha256sum *.nupkg *.snupkg corresponding-source.tar.xz corresponding-source.tar.xz.sha256 build-records.tar.gz > SHA256SUMS
+          )
+          gh release create "native-v$version" --target "$GITHUB_SHA" --prerelease --title "LibMpv.Managed Windows x64 preview" \
+            --notes 'Verified Win64 NuGet packages and corresponding source for the LGPL runtime.' artifacts/release/*
+
+  publish:
+    if: inputs.operation == 'publish' && github.repository == 'AliceClock/LibMpv.Managed' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: nuget
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Verify staged release and package checksums
+        id: approved
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          read_version() {
+            python3 -c 'import sys, xml.etree.ElementTree as x; print(x.parse(sys.argv[1]).findtext(".//Version"))' "$1"
+          }
+          native=$(read_version native/package/LibMpv.Managed.Native.WinX64.csproj)
+          managed=$(read_version src/LibMpv.Managed/LibMpv.Managed.csproj)
+          [[ "$native" =~ ^[0-9]+\.[0-9]+\.[0-9]+-preview\.[0-9]+$ ]]
+          [[ "$managed" =~ ^[0-9]+\.[0-9]+\.[0-9]+-preview\.[0-9]+$ ]]
+          gh release download "native-v$native" --pattern '*' --dir artifacts/release
+          cd artifacts/release
+          sha256sum -c SHA256SUMS
+          sha256sum -c corresponding-source.tar.xz.sha256
+          native_file="LibMpv.Managed.Native.WinX64.$native.nupkg"
+          managed_file="LibMpv.Managed.$managed.nupkg"
+          grep -Fq "  $native_file" SHA256SUMS
+          grep -Fq "  $managed_file" SHA256SUMS
+          echo "native=$native_file" >> "$GITHUB_OUTPUT"
+          echo "managed=$managed_file" >> "$GITHUB_OUTPUT"
       - uses: NuGet/login@v1
         id: nuget
         with:
           user: ${{ vars.NUGET_USER }}
       - name: Push verified packages
         env:
+          NATIVE_PACKAGE: ${{ steps.approved.outputs.native }}
+          MANAGED_PACKAGE: ${{ steps.approved.outputs.managed }}
           NUGET_API_KEY: ${{ steps.nuget.outputs.NUGET_API_KEY }}
         shell: bash
         run: |
-          dotnet nuget push artifacts/feed/LibMpv.Managed.Native.WinX64.*.nupkg --api-key "$NUGET_API_KEY" \
-            --source https://api.nuget.org/v3/index.json --skip-duplicate
-          for package in artifacts/feed/LibMpv.Managed.*.nupkg; do
-            [[ "${package##*/}" != *Native.WinX64* ]] || continue
-            dotnet nuget push "$package" --api-key "$NUGET_API_KEY" \
+          for package in "$NATIVE_PACKAGE" "$MANAGED_PACKAGE"; do
+            dotnet nuget push "artifacts/release/$package" --api-key "$NUGET_API_KEY" \
               --source https://api.nuget.org/v3/index.json --skip-duplicate
           done
 
