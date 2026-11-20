@@ -79,6 +79,10 @@ while IFS=$'\t' read -r name _ _; do
         \( -iname 'copying*' -o -iname 'license*' -o -iname 'notice*' -o -iname 'ftl.txt' -o -iname 'copyright*' \) -print0)
     test -d "/out/licenses/$name"
 done < /recipe/sources.lock.tsv
+mkdir -p /out/licenses/toolchain
+cp -L /usr/share/doc/gcc-mingw-w64-base/copyright /out/licenses/toolchain/gcc-mingw-w64.txt
+cp -L /usr/share/doc/mingw-w64-common/copyright /out/licenses/toolchain/mingw-w64.txt
+cp -L /usr/share/common-licenses/GPL-3 /out/licenses/toolchain/GPL-3.txt
 cp /recipe/{build.sh,bootstrap.sh,cross.ini,Dockerfile,sources.lock.tsv,verify-imports.py} /out
 cp build/ffmpeg/{config.h,ffbuild/config.log} /out/
 cp build/mpv/meson-logs/meson-log.txt /out/

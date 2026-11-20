@@ -27,6 +27,8 @@ internal static class Program
                     Options = new Dictionary<string, string>
                     {
                         ["wid"] = video.Handle.ToInt64().ToString(CultureInfo.InvariantCulture),
+                        ["vo"] = "gpu",
+                        ["gpu-api"] = "opengl",
                     },
                 });
                 await player.CommandAsync(["loadfile", Path.GetFullPath(args[0]), "replace"]);

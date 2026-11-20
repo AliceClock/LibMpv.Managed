@@ -6,7 +6,7 @@ from pathlib import Path
 SYSTEM_DLLS = set("""
 advapi32 avrt bcrypt comctl32 comdlg32 crypt32 d3d9 d3d11 dcomp dwmapi dwrite
 dxgi gdi32 gdiplus hid imm32 iphlpapi kernel32 ksuser mf mfplat mfuuid
-msimg32 msvcrt ncrypt ntdll ole32 oleaut32 opengl32 powrprof propsys psapi
+msimg32 msvcrt ncrypt ntdll ole32 oleaut32 opengl32 pathcch powrprof propsys psapi
 rtworkq secur32 setupapi shcore shell32 shlwapi user32 userenv uxtheme
 version winhttp winmm winspool ws2_32 wtsapi32
 """.split())
